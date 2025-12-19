@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>CSCC Campus Parking Finder</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Mapbox CSS -->
+  <link
+    href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css"
+    rel="stylesheet"
+  />
+
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: flex;
+      height: 100vh;
+    }
+
+    #sidebar {
+      width: 340px;
+      padding: 16px;
+      box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
+      box-sizing: border-box;
+      overflow-y: auto;
+    }
+
+    #map {
+      flex: 1;
+    }
+
+    h1 {
+      font-size: 20px;
+      margin: 0 0 8px;
+    }
+
+    .small {
+      font-size: 13px;
+      color: #555;
+      margin-bottom: 12px;
+    }
+
+    button {
+      cursor: pointer;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: none;
+      background: #0f766e;
+      color: white;
+      font-size: 14px;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+
+    button.secondary {
+      background: #4b5563;
+    }
+
+    .lot-card {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 10px;
+      margin-top: 8px;
+      font-size: 14px;
+    }
+
+    .lot-card.closest {
+      border-color: #0f766e;
+      box-shadow: 0 0 0 1px #0f766e;
+    }
+
+    .lot-name {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: #e5e7eb;
+      margin-right: 4px;
+    }
+
+    .badge.green {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .badge.red {
+      background: #fee2e2;
+      color: #b91c1c;
+    }
+
+    .distance {
+      font-size: 12px;
+      color: #4b5563;
+      margin-top: 4px;
+    }
+
+    #status {
+      font-size: 12px;
+      margin-top: 6px;
+      color: #6b7280;
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h1>CSCC Parking Finder</h1>
+    <div class="small">
+      Find the closest and less crowded parking lot at Columbus State Campus.
+    </div>
+
+    <button id="locateBtn">Use my location</button>
+    <button id="loadAllBtn" class="secondary">Show all parking lots</button>
+
+    <div id="status"></div>
+
+    <h3 style="margin-top: 16px; margin-bottom: 4px;">Parking lots</h3>
+    <div id="lotsContainer"></div>
+
+    <h3 style="margin-top: 16px; margin-bottom: 4px;">Favorites</h3>
+    <div id="favoritesContainer"></div>
+  </div>
+
+  <div id="map"></div>
+
+
+
+  <!-- Mapbox JS -->
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
+
+  <script>
+    const MAPBOX_TOKEN = "pk.eyJ1IjoiYXNtYWFjYXBzdG9uZSIsImEiOiJjbWl6MHRoYjIwbTA5M2NweWQ4N3loaWx6In0.L1yhV4yCnZ5gr2zDdkOEBA"; 
+    const API_BASE = "http://127.0.0.1:8000";
+
+    mapboxgl.accessToken = MAPBOX_TOKEN;
+
+    const map = new mapboxgl.Map({
+      container: "map",
+      style: "mapbox://styles/mapbox/streets-v12",
+      center: [-82.9910, 39.9680],
+      zoom: 15,
+    });
+
+
+
+    const markers = {};
+
+    const statusEl = document.getElementById("status");
+    const lotsContainer = document.getElementById("lotsContainer");
+    const favoritesContainer = document.getElementById("favoritesContainer");
+    const locateBtn = document.getElementById("locateBtn");
+    const loadAllBtn = document.getElementById("loadAllBtn");
+
+
+
+    function setStatus(msg) {
+      statusEl.textContent = msg || "";
+    }
+
+
+
+
+    function formatDistance(meters) {
+      if (meters == null) return "";
+      if (meters < 1000) return `${Math.round(meters)} m away`;
+      return `${(meters / 1000).toFixed(2)} km away`;
+    }
+
+
+
+
+    function occupancyBadge(lot) {
+      const pct = (lot.occupied / lot.capacity) * 100;
+      const cls = pct > 80 ? "badge red" : "badge green";
+      const label = pct > 80 ? "Busy" : "Open";
+      return `<span class="${cls}">${label}</span>
+              <span class="badge">${lot.occupied}/${lot.capacity} used</span>`;
+    }
+
+
+
+    function createMarker(lot, isClosest = false) {
+      const el = document.createElement("div");
+      el.style.width = "18px";
+      el.style.height = "18px";
+      el.style.borderRadius = "50%";
+      el.style.backgroundColor = isClosest ? "#0f766e" : "#1d4ed8";
+      el.style.border = "2px solid white";
+      el.style.boxShadow = "0 0 4px rgba(0,0,0,0.4)";
+      el.style.cursor = "pointer";
+
+
+      const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
+        <strong>${lot.name}</strong><br/>
+        ${occupancyBadge(lot)}<br/>
+        ${lot.distance_m ? formatDistance(lot.distance_m) : ""}
+      `);
+
+
+      return new mapboxgl.Marker(el)
+        .setLngLat([lot.longitude, lot.latitude])
+        .setPopup(popup)
+        .addTo(map);
+    }
+
+
+
+    function clearMarkers() {
+      Object.values(markers).forEach((m) => m.remove());
+      Object.keys(markers).forEach((k) => delete markers[k]);
+    }
+
+
+    function renderLots(lots, highlightClosest = false) {
+      lotsContainer.innerHTML = "";
+
+
+      lots.forEach((lot, index) => {
+        const isClosest = highlightClosest && index === 0;
+
+
+        const card = document.createElement("div");
+        card.className = "lot-card" + (isClosest ? " closest" : "");
+        card.innerHTML = `
+          <div class="lot-name">${lot.name}</div>
+          <div>${occupancyBadge(lot)}</div>
+          <div class="distance">${formatDistance(lot.distance_m)}</div>
+          <div style="margin-top: 6px;">
+            <button data-lot-id="${lot.id}" class="fav-btn">Add to favorites</button>
+            <button data-lot-id="${lot.id}" class="zoom-btn secondary">Zoom</button>
+          </div>
+        `;
+        lotsContainer.appendChild(card);
+
+        if (markers[lot.id]) markers[lot.id].remove();
+        markers[lot.id] = createMarker(lot, isClosest);
+      });
+
+
+
+      document.querySelectorAll(".zoom-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const lotId = Number(btn.dataset.lotId);
+          const lot = lots.find((l) => l.id === lotId);
+          map.flyTo({ center: [lot.longitude, lot.latitude], zoom: 17 });
+        });
+      });
+
+
+
+      document.querySelectorAll(".fav-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const lotId = Number(btn.dataset.lotId);
+          await addFavorite(lotId);
+          await loadFavorites();
+        });
+      });
+    }
+    
+
+    async function loadLots(userLocation = null) {
+      try {
+        setStatus("Loading parking lots...");
+        clearMarkers();
+
+        let url = `${API_BASE}/api/parking-lots`;
+        if (userLocation) {
+          url += `?lat=${userLocation.lat}&lon=${userLocation.lon}`;
+        }
+
+        const res = await fetch(url);
+        const lots = await res.json();
+
+        renderLots(lots, !!userLocation);
+
+        if (lots.length > 0) {
+          map.flyTo({
+            center: [lots[0].longitude, lots[0].latitude],
+            zoom: 16,
+          });
+        }
+
+        setStatus(userLocation ? "Sorted by closest lot." : "Showing all lots.");
+      } catch (err) {
+        console.error(err);
+        setStatus("Error loading lots.");
+      }
+    }
+
+    async function loadFavorites() {
+      try {
+        const res = await fetch(`${API_BASE}/api/favorites`);
+        const favorites = await res.json();
+
+        favoritesContainer.innerHTML = "";
+
+        if (favorites.length === 0) {
+          favoritesContainer.innerHTML = "<div class='small'>No favorites yet.</div>";
+          return;
+        }
+
+        favorites.forEach((lot) => {
+          const div = document.createElement("div");
+          div.className = "lot-card";
+          div.innerHTML = `
+            <div class="lot-name">${lot.name}</div>
+            <div>${occupancyBadge(lot)}</div>
+            <div style="margin-top: 6px;">
+              <button data-lot-id="${lot.id}" class="unfav-btn secondary">Remove</button>
+            </div>
+          `;
+          favoritesContainer.appendChild(div);
+        });
+
+        document.querySelectorAll(".unfav-btn").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const lotId = Number(btn.dataset.lotId);
+            await removeFavorite(lotId);
+            await loadFavorites();
+          });
+        });
+
+      } catch (err) {
+        console.error(err);
+        favoritesContainer.innerHTML = "<div class='small'>Error loading favorites.</div>";
+      }
+    }
+
+    async function addFavorite(lotId) {
+      await fetch(`${API_BASE}/api/favorites/${lotId}`, { method: "POST" });
+    }
+
+    async function removeFavorite(lotId) {
+      await fetch(`${API_BASE}/api/favorites/${lotId}`, { method: "DELETE" });
+    }
+
+    locateBtn.addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        setStatus("Your browser does not support location.");
+        return;
+      }
+
+      setStatus("Getting your location...");
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const userLocation = {
+            lat: pos.coords.latitude,
+            lon: pos.coords.longitude,
+          };
+          await loadLots(userLocation);
+        },
+        () => setStatus("Unable to retrieve location.")
+      );
+    });
+
+    loadAllBtn.addEventListener("click", () => loadLots(null));
+
+    loadLots(null);
+    loadFavorites();
+  </script>
+</body>
+</html>
